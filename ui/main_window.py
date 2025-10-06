@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
 from core import AppConfig, MeasurementController, format_capacitance, get_typical_ranges
 from instruments import Keithley2110, MockInstrument
 from .plot_widget import PlotWidget
+from .chat_widget import ChatWidget
+from ai import AIAssistant, MeasurementTools
 
 
 class MainWindow(QMainWindow):
@@ -29,6 +31,11 @@ class MainWindow(QMainWindow):
         self._controller: Optional[MeasurementController] = None
         self._current_instrument: Optional[Keithley2110 | MockInstrument] = None
         self._is_measuring = False
+        
+        # AI assistant components
+        self._ai_tools: Optional[MeasurementTools] = None
+        self._ai_assistant: Optional[AIAssistant] = None
+        self._chat_widget: Optional[ChatWidget] = None
         
         # UI components
         self._plot_widget: Optional[PlotWidget] = None
@@ -59,9 +66,14 @@ class MainWindow(QMainWindow):
         self._range_label: Optional[QLabel] = None
         self._error_count_label: Optional[QLabel] = None
         
+        # AI control widgets
+        self._ai_enabled_check: Optional[QCheckBox] = None
+        self._ai_api_key_button: Optional[QPushButton] = None
+        
         # Setup UI
         self._setup_ui()
         self._setup_controller()
+        self._setup_ai_assistant()
         self._load_config()
         
         # Update timer for status bar
@@ -72,7 +84,7 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         """Setup the main window UI."""
         self.setWindowTitle("Capacitance Monitor - Keithley 2110")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(100, 25, 1200, 790)
         
         # Create central widget
         central_widget = QWidget()
@@ -81,13 +93,23 @@ class MainWindow(QMainWindow):
         # Create main layout
         main_layout = QHBoxLayout(central_widget)
         
+        # Create left panel with plot and chat
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        
         # Create plot area
         self._plot_widget = PlotWidget()
-        main_layout.addWidget(self._plot_widget, 2)  # 2/3 of space
+        left_layout.addWidget(self._plot_widget, 3)  # 3/4 of left space
+        
+        # Create chat widget
+        self._chat_widget = ChatWidget()
+        left_layout.addWidget(self._chat_widget, 1)  # 1/4 of left space
+        
+        main_layout.addWidget(left_panel, 2)  # 2/3 of total space
         
         # Create control panel
         control_panel = self._create_control_panel()
-        main_layout.addWidget(control_panel, 1)  # 1/3 of space
+        main_layout.addWidget(control_panel, 1)  # 1/3 of total space
         
         # Create toolbar
         self._create_toolbar()
@@ -256,6 +278,22 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(unit_group)
         
+        # AI Assistant controls
+        ai_group = QGroupBox("AI Assistant")
+        ai_layout = QGridLayout(ai_group)
+        
+        self._ai_enabled_check = QCheckBox("Enable AI Assistant")
+        self._ai_enabled_check.setChecked(False)
+        self._ai_enabled_check.toggled.connect(self._on_ai_enabled_toggled)
+        ai_layout.addWidget(self._ai_enabled_check, 0, 0, 1, 2)
+        
+        self._ai_api_key_button = QPushButton("Set API Key")
+        self._ai_api_key_button.clicked.connect(self._on_set_api_key_clicked)
+        self._ai_api_key_button.setEnabled(False)
+        ai_layout.addWidget(self._ai_api_key_button, 1, 0, 1, 2)
+        
+        layout.addWidget(ai_group)
+        
         # Add stretch to push everything to top
         layout.addStretch()
         
@@ -297,6 +335,28 @@ class MainWindow(QMainWindow):
         self._controller.error_occurred.connect(self._on_error_occurred)
         self._controller.data_cleared.connect(self._on_data_cleared)
     
+    def _setup_ai_assistant(self) -> None:
+        """Setup the AI assistant."""
+        # Create AI tools
+        self._ai_tools = MeasurementTools(self._controller, self._config)
+        
+        # Create AI assistant (will automatically load API key from .env file)
+        self._ai_assistant = AIAssistant(self._ai_tools)
+        
+        # Connect chat widget signals
+        if self._chat_widget:
+            self._chat_widget.message_sent.connect(self._on_chat_message_sent)
+        
+        # Connect AI assistant signals
+        self._ai_assistant.message_received.connect(self._on_ai_message_received)
+        self._ai_assistant.error_occurred.connect(self._on_ai_error_occurred)
+        self._ai_assistant.tool_executed.connect(self._on_ai_tool_executed)
+        
+        # Connect AI tools signals
+        self._ai_tools.measurement_started.connect(self._on_ai_measurement_started)
+        self._ai_tools.measurement_stopped.connect(self._on_ai_measurement_stopped)
+        self._ai_tools.data_exported.connect(self._on_ai_data_exported)
+    
     def _load_config(self) -> None:
         """Load configuration into UI widgets."""
         # Time window
@@ -337,6 +397,20 @@ class MainWindow(QMainWindow):
         # Units
         self._unit_combo.setCurrentText(self._config.capacitance_unit)
         
+        # AI settings
+        self._ai_enabled_check.setChecked(self._config.ai_enabled)
+        self._ai_api_key_button.setEnabled(self._config.ai_enabled)
+        
+        # Check if API key is available from .env file
+        import os
+        if os.getenv("OPENAI_API_KEY"):
+            self._config.openai_api_key = os.getenv("OPENAI_API_KEY")
+            if self._ai_assistant and self._config.ai_enabled:
+                self._ai_assistant.set_api_key(self._config.openai_api_key)
+                # Show message in chat that API key was loaded
+                if self._chat_widget:
+                    self._chat_widget.add_message("AI Assistant", "OpenAI API key loaded from .env file. I'm ready to help!", False)
+        
         # Initialize resource list
         self._refresh_resources()
     
@@ -358,6 +432,10 @@ class MainWindow(QMainWindow):
                 self._current_instrument = Keithley2110()
                 self._config.use_mock_instrument = False
                 self._config.visa_resource = self._resource_combo.currentText()
+            
+            # Set instrument in AI tools
+            if self._ai_tools:
+                self._ai_tools.set_instrument(self._current_instrument)
             
             # Start measurement
             self._controller.start_measurement(self._current_instrument)
@@ -424,8 +502,7 @@ class MainWindow(QMainWindow):
         
         if reply == QMessageBox.Yes:
             self._controller.clear_data()
-            self._plot_widget.clear_current_data()
-            self._plot_widget.clear_overlay_data()
+            # Note: _on_data_cleared will be called automatically by the controller signal
     
     def _on_time_window_changed(self, text: str) -> None:
         """Handle time window combo change."""
@@ -522,6 +599,40 @@ class MainWindow(QMainWindow):
         self._config.capacitance_unit = unit
         self._plot_widget.set_capacitance_unit(unit)
         self._save_config()
+    
+    def _on_ai_enabled_toggled(self, checked: bool) -> None:
+        """Handle AI enabled toggle."""
+        self._config.ai_enabled = checked
+        self._ai_api_key_button.setEnabled(checked)
+        
+        if checked and self._config.openai_api_key:
+            self.set_ai_api_key(self._config.openai_api_key)
+        elif not checked:
+            self.set_ai_api_key("")
+        
+        self._save_config()
+    
+    def _on_set_api_key_clicked(self) -> None:
+        """Handle set API key button click."""
+        from PySide6.QtWidgets import QInputDialog
+        
+        current_key = self._config.openai_api_key or ""
+        api_key, ok = QInputDialog.getText(
+            self, 
+            "Set OpenAI API Key", 
+            "Enter your OpenAI API key:",
+            text=current_key
+        )
+        
+        if ok and api_key:
+            self._config.openai_api_key = api_key
+            self.set_ai_api_key(api_key)
+            self._save_config()
+        elif ok and not api_key:
+            # Clear the key
+            self._config.openai_api_key = None
+            self.set_ai_api_key("")
+            self._save_config()
     
     def _on_instrument_type_changed(self, instrument_type: str) -> None:
         """Handle instrument type change."""
@@ -726,7 +837,7 @@ class MainWindow(QMainWindow):
     
     def _on_data_cleared(self) -> None:
         """Handle data cleared from controller."""
-        self._plot_widget.clear_current_data()
+        self._plot_widget.clear_all_data()
     
     def _update_status(self) -> None:
         """Update status bar information."""
@@ -752,8 +863,8 @@ class MainWindow(QMainWindow):
     def _save_config(self) -> None:
         """Save current configuration."""
         try:
-            config_dir = Path(appdirs.user_config_dir("capacitance-monitor"))
-            config_dir.mkdir(parents=True, exist_ok=True)
+            from path import get_config_directory
+            config_dir = get_config_directory()
             config_file = config_dir / "config.json"
             self._config.save_to_file(config_file)
         except Exception as e:
@@ -773,3 +884,59 @@ class MainWindow(QMainWindow):
         self._save_config()
         
         event.accept()
+    
+    def _on_chat_message_sent(self, message: str) -> None:
+        """Handle chat message sent."""
+        if self._ai_assistant:
+            # Disable input while processing
+            self._chat_widget.set_input_enabled(False)
+            
+            # Send message to AI assistant
+            self._ai_assistant.send_message(message)
+    
+    def _on_ai_message_received(self, message: str) -> None:
+        """Handle AI message received."""
+        if self._chat_widget:
+            self._chat_widget.add_message("AI Assistant", message, False)
+            # Re-enable input
+            self._chat_widget.set_input_enabled(True)
+            self._chat_widget.focus_input()
+    
+    def _on_ai_error_occurred(self, error_message: str) -> None:
+        """Handle AI error."""
+        if self._chat_widget:
+            self._chat_widget.add_message("AI Assistant", f"Error: {error_message}", False)
+            # Re-enable input
+            self._chat_widget.set_input_enabled(True)
+            self._chat_widget.focus_input()
+    
+    def _on_ai_tool_executed(self, tool_name: str, result_message: str) -> None:
+        """Handle AI tool execution."""
+        self._logger.info(f"AI tool executed: {tool_name} - {result_message}")
+    
+    def _on_ai_measurement_started(self) -> None:
+        """Handle AI-triggered measurement start."""
+        # Update UI state
+        self._start_button.setEnabled(False)
+        self._stop_button.setEnabled(True)
+        self._is_measuring = True
+    
+    def _on_ai_measurement_stopped(self) -> None:
+        """Handle AI-triggered measurement stop."""
+        # Update UI state
+        self._start_button.setEnabled(True)
+        self._stop_button.setEnabled(False)
+        self._is_measuring = False
+    
+    def _on_ai_data_exported(self, filepath: str) -> None:
+        """Handle AI-triggered data export."""
+        self._logger.info(f"AI exported data to: {filepath}")
+    
+    def set_ai_api_key(self, api_key: str) -> None:
+        """Set the OpenAI API key for the AI assistant."""
+        if self._ai_assistant:
+            self._ai_assistant.set_api_key(api_key)
+            if api_key:
+                self._chat_widget.add_message("AI Assistant", "OpenAI API key set successfully. I'm ready to help!", False)
+            else:
+                self._chat_widget.add_message("AI Assistant", "OpenAI API key cleared. AI features are disabled.", False)

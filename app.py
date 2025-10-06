@@ -8,9 +8,13 @@ from pathlib import Path
 
 import appdirs
 from PySide6.QtWidgets import QApplication
+from dotenv import load_dotenv
 
 from core import AppConfig
 from ui import MainWindow
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def setup_logging(debug: bool = False) -> None:
@@ -28,8 +32,8 @@ def setup_logging(debug: bool = False) -> None:
     console_handler.setFormatter(formatter)
     
     # File handler (rotating)
-    log_dir = Path(appdirs.user_log_dir("capacitance-monitor"))
-    log_dir.mkdir(parents=True, exist_ok=True)
+    from path import get_logs_directory
+    log_dir = get_logs_directory()
     log_file = log_dir / "capacitance-monitor.log"
     
     file_handler = logging.handlers.RotatingFileHandler(
@@ -51,7 +55,9 @@ def setup_logging(debug: bool = False) -> None:
 
 def load_config(args) -> AppConfig:
     """Load application configuration."""
-    config_dir = Path(appdirs.user_config_dir("capacitance-monitor"))
+    from path import get_config_directory
+    
+    config_dir = get_config_directory()
     config_file = config_dir / "config.json"
     
     try:

@@ -78,4 +78,4 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo Application finished successfully.
-pause
+exit /b 0

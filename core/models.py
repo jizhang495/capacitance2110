@@ -42,6 +42,10 @@ class AppConfig(BaseModel):
     # Display settings
     capacitance_unit: str = "auto"  # auto, pF, nF, µF, F
     
+    # AI settings
+    openai_api_key: Optional[str] = None
+    ai_enabled: bool = False
+    
     @field_validator("sample_period_ms")
     @classmethod
     def validate_sample_period(cls, v: int) -> int:

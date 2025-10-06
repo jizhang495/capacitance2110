@@ -120,8 +120,36 @@ class PlotWidget(QWidget):
     
     def clear_current_data(self) -> None:
         """Clear current measurement data."""
+        # Remove current plot item from display
+        if self._current_plot_item is not None:
+            self._plot_widget.removeItem(self._current_plot_item)
+            if self._current_plot_item in self._legend.items:
+                self._legend.removeItem(self._current_plot_item)
+            self._current_plot_item = None
+        
+        # Clear data
         self._current_data.clear()
+        
+        # Update plot
         self._update_plot()
+    
+    def clear_all_data(self) -> None:
+        """Clear all data and reset the plot completely."""
+        # Clear current data
+        self.clear_current_data()
+        
+        # Clear overlay data
+        self.clear_overlay_data()
+        
+        # Reset plot appearance
+        self._plot_widget.clear()
+        if hasattr(self, '_legend'):
+            self._legend.clear()
+        
+        # Reset plot items
+        self._current_plot_item = None
+        self._overlay_plot_items.clear()
+        self._overlay_legend_items.clear()
     
     def set_time_window(self, seconds: float) -> None:
         """Set the time window for display."""

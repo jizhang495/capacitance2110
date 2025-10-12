@@ -50,9 +50,15 @@ class VISAWorker(QThread):
         try:
             # Open and initialize instrument
             self._instrument.open()
-            self._instrument.initialize_capacitance_mode()
+            
+            # Initialize based on measurement mode
+            if self._config.measurement_mode == "capacitance":
+                self._instrument.initialize_capacitance_mode()
+            else:
+                self._instrument.initialize_resistance_mode()
+            
             self.connection_changed.emit(True)
-            self.status_changed.emit("Connected to instrument")
+            self.status_changed.emit(f"Connected to instrument ({self._config.measurement_mode} mode)")
             
             # Configure instrument settings
             self._configure_instrument()
@@ -68,15 +74,18 @@ class VISAWorker(QThread):
                     
                     # Check if it's time for next sample
                     if elapsed_ms >= self._sample_period_ms:
-                        # Read capacitance value
-                        capacitance = self._instrument.read_capacitance()
+                        # Read value based on measurement mode
+                        if self._config.measurement_mode == "capacitance":
+                            value = self._instrument.read_capacitance()
+                        else:
+                            value = self._instrument.read_resistance()
                         
                         # Calculate timestamp and elapsed time
                         timestamp = datetime.now()
                         t_seconds = current_time - start_time
                         
                         # Emit sample signal
-                        self.sample_acquired.emit(timestamp, capacitance)
+                        self.sample_acquired.emit(timestamp, value)
                         
                         # Update timing
                         self._last_sample_time = current_time
@@ -127,7 +136,10 @@ class VISAWorker(QThread):
             
             # Set manual range if not autorange
             if not self._config.autorange_enabled:
-                self._instrument.set_manual_range(self._config.manual_range_farads)
+                if self._config.measurement_mode == "capacitance":
+                    self._instrument.set_manual_range_capacitance(self._config.manual_range_farads)
+                else:
+                    self._instrument.set_manual_range_resistance(self._config.manual_range_ohms)
             
             # Set NPLC (integration time)
             self._instrument.set_nplc(1.0)  # Default to 1 NPLC
@@ -207,8 +219,10 @@ class MeasurementController(QObject):
             self._metadata = MeasurementMetadata(
                 start_time=self._start_time,
                 sample_period_ms=self._config.sample_period_ms,
+                measurement_mode=self._config.measurement_mode,
                 autorange_enabled=self._config.autorange_enabled,
-                manual_range_farads=self._config.manual_range_farads if not self._config.autorange_enabled else None,
+                manual_range_farads=self._config.manual_range_farads if not self._config.autorange_enabled and self._config.measurement_mode == "capacitance" else None,
+                manual_range_ohms=self._config.manual_range_ohms if not self._config.autorange_enabled and self._config.measurement_mode == "resistance" else None,
                 instrument_type=instrument.instrument_type,
                 visa_resource=getattr(instrument, '_resource_string', None),
             )
@@ -350,7 +364,7 @@ class MeasurementController(QObject):
             return self._worker.get_soft_error_count()
         return 0
     
-    def _on_sample_acquired(self, timestamp: datetime, capacitance_farads: float) -> None:
+    def _on_sample_acquired(self, timestamp: datetime, value: float) -> None:
         """Handle new sample from worker thread."""
         if not self._start_time:
             return
@@ -358,18 +372,25 @@ class MeasurementController(QObject):
         # Calculate elapsed time
         t_seconds = (timestamp - self._start_time).total_seconds()
         
-        # Create sample
-        sample = Sample(
-            timestamp=timestamp,
-            t_seconds=t_seconds,
-            capacitance_farads=capacitance_farads,
-        )
+        # Create sample based on measurement mode
+        if self._config.measurement_mode == "capacitance":
+            sample = Sample(
+                timestamp=timestamp,
+                t_seconds=t_seconds,
+                capacitance_farads=value,
+            )
+        else:
+            sample = Sample(
+                timestamp=timestamp,
+                t_seconds=t_seconds,
+                resistance_ohms=value,
+            )
         
         # Add to buffer
         self._samples.append(sample)
         
         # Emit signal for UI update
-        self.new_sample.emit(timestamp, capacitance_farads)
+        self.new_sample.emit(timestamp, value)
     
     def _on_error_occurred(self, error_message: str) -> None:
         """Handle error from worker thread."""

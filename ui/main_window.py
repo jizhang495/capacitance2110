@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (
     QGroupBox, QGridLayout, QDoubleSpinBox, QStatusBar, QToolBar,
 )
 
-from core import AppConfig, MeasurementController, format_capacitance, get_typical_ranges
+from core import AppConfig, MeasurementController
+from core.units import format_capacitance, format_resistance, get_typical_ranges, get_typical_resistance_ranges
 from instruments import Keithley2110, MockInstrument
 from .plot_widget import PlotWidget
 from .chat_widget import ChatWidget
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self._autorange_check: Optional[QCheckBox] = None
         self._manual_range_combo: Optional[QComboBox] = None
         self._sample_period_spin: Optional[QSpinBox] = None
+        self._measurement_mode_combo: Optional[QComboBox] = None
         self._unit_combo: Optional[QComboBox] = None
         
         # Status labels
@@ -83,7 +85,7 @@ class MainWindow(QMainWindow):
     
     def _setup_ui(self) -> None:
         """Setup the main window UI."""
-        self.setWindowTitle("Capacitance Monitor - Keithley 2110")
+        self.setWindowTitle("Measurement Monitor - Keithley 2110")
         self.setGeometry(100, 25, 1200, 790)
         
         # Create central widget
@@ -232,6 +234,18 @@ class MainWindow(QMainWindow):
         instrument_layout.addWidget(self._test_connection_button, 2, 1)
         
         layout.addWidget(instrument_group)
+        
+        # Measurement mode controls
+        mode_group = QGroupBox("Measurement Mode")
+        mode_layout = QGridLayout(mode_group)
+        
+        self._measurement_mode_combo = QComboBox()
+        self._measurement_mode_combo.addItems(["Capacitance", "Resistance"])
+        self._measurement_mode_combo.currentTextChanged.connect(self._on_measurement_mode_changed)
+        mode_layout.addWidget(QLabel("Mode:"), 0, 0)
+        mode_layout.addWidget(self._measurement_mode_combo, 0, 1)
+        
+        layout.addWidget(mode_group)
         
         # Range controls
         range_group = QGroupBox("Measurement Range")
@@ -394,8 +408,18 @@ class MainWindow(QMainWindow):
         # Sample period
         self._sample_period_spin.setValue(self._config.sample_period_ms)
         
+        # Measurement mode
+        if self._config.measurement_mode == "capacitance":
+            self._measurement_mode_combo.setCurrentText("Capacitance")
+        else:
+            self._measurement_mode_combo.setCurrentText("Resistance")
+        
         # Units
-        self._unit_combo.setCurrentText(self._config.capacitance_unit)
+        self._update_unit_combo()
+        if self._config.measurement_mode == "capacitance":
+            self._unit_combo.setCurrentText(self._config.capacitance_unit)
+        else:
+            self._unit_combo.setCurrentText(self._config.resistance_unit)
         
         # AI settings
         self._ai_enabled_check.setChecked(self._config.ai_enabled)
@@ -415,10 +439,31 @@ class MainWindow(QMainWindow):
         self._refresh_resources()
     
     def _populate_range_combo(self) -> None:
-        """Populate the manual range combo box."""
-        ranges = get_typical_ranges("nF")
-        for range_val in ranges:
-            self._manual_range_combo.addItem(f"{range_val:.0f} nF")
+        """Populate the manual range combo box based on current measurement mode."""
+        self._manual_range_combo.clear()
+        
+        if self._config.measurement_mode == "capacitance":
+            ranges = get_typical_ranges("nF")
+            for range_val in ranges:
+                self._manual_range_combo.addItem(f"{range_val:.0f} nF")
+        else:
+            ranges = get_typical_resistance_ranges("kΩ")
+            for range_val in ranges:
+                if range_val < 1:
+                    self._manual_range_combo.addItem(f"{range_val*1000:.0f} Ω")
+                else:
+                    self._manual_range_combo.addItem(f"{range_val:.0f} kΩ")
+    
+    def _update_unit_combo(self) -> None:
+        """Update the unit combo box based on current measurement mode."""
+        self._unit_combo.clear()
+        
+        if self._config.measurement_mode == "capacitance":
+            self._unit_combo.addItems(["auto", "pF", "nF", "µF", "F"])
+            self._unit_combo.setCurrentText(self._config.capacitance_unit)
+        else:
+            self._unit_combo.addItems(["auto", "mΩ", "Ω", "kΩ", "MΩ"])
+            self._unit_combo.setCurrentText(self._config.resistance_unit)
     
     def _on_start_clicked(self) -> None:
         """Handle start button click."""
@@ -561,19 +606,40 @@ class MainWindow(QMainWindow):
     
     def _on_manual_range_changed(self, text: str) -> None:
         """Handle manual range change."""
-        # Parse range value from text (e.g., "1 nF" -> 1e-9 F)
+        # Parse range value from text
         try:
-            value_str, unit = text.split()
-            if unit == "nF":
-                range_farads = float(value_str) * 1e-9
-            elif unit == "µF":
-                range_farads = float(value_str) * 1e-6
-            elif unit == "pF":
-                range_farads = float(value_str) * 1e-12
-            else:
-                range_farads = float(value_str)
+            parts = text.split()
+            value_str = parts[0]
+            unit = parts[1] if len(parts) > 1 else ""
             
-            self._config.manual_range_farads = range_farads
+            if self._config.measurement_mode == "capacitance":
+                # Parse capacitance units
+                if unit == "nF":
+                    range_farads = float(value_str) * 1e-9
+                elif unit == "µF":
+                    range_farads = float(value_str) * 1e-6
+                elif unit == "pF":
+                    range_farads = float(value_str) * 1e-12
+                elif unit == "F":
+                    range_farads = float(value_str)
+                else:
+                    range_farads = float(value_str) * 1e-9  # Default to nF
+                
+                self._config.manual_range_farads = range_farads
+            else:
+                # Parse resistance units
+                if unit == "Ω":
+                    range_ohms = float(value_str)
+                elif unit == "kΩ":
+                    range_ohms = float(value_str) * 1e3
+                elif unit == "MΩ":
+                    range_ohms = float(value_str) * 1e6
+                elif unit == "mΩ":
+                    range_ohms = float(value_str) * 1e-3
+                else:
+                    range_ohms = float(value_str)  # Default to Ω
+                
+                self._config.manual_range_ohms = range_ohms
             
             # Update controller if measuring
             if self._controller:
@@ -594,10 +660,61 @@ class MainWindow(QMainWindow):
         
         self._save_config()
     
+    def _on_measurement_mode_changed(self, mode_text: str) -> None:
+        """Handle measurement mode change."""
+        mode = "capacitance" if mode_text == "Capacitance" else "resistance"
+        
+        # Check if mode actually changed
+        if self._config.measurement_mode == mode:
+            return
+        
+        # If measurement is running, stop it first
+        was_measuring = self._is_measuring
+        if was_measuring:
+            reply = QMessageBox.question(
+                self, "Switch Measurement Mode", 
+                "Switching measurement mode will stop the current measurement. Continue?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            
+            if reply == QMessageBox.No:
+                # Revert the combo box selection
+                if self._config.measurement_mode == "capacitance":
+                    self._measurement_mode_combo.setCurrentText("Capacitance")
+                else:
+                    self._measurement_mode_combo.setCurrentText("Resistance")
+                return
+            
+            self._on_stop_clicked()
+        
+        # Update config
+        self._config.measurement_mode = mode
+        
+        # Update UI components
+        self._populate_range_combo()
+        self._update_unit_combo()
+        
+        # Update plot widget
+        self._plot_widget.set_measurement_mode(mode)
+        if mode == "capacitance":
+            self._plot_widget.set_capacitance_unit(self._config.capacitance_unit)
+        else:
+            self._plot_widget.set_resistance_unit(self._config.resistance_unit)
+        
+        # Save config
+        self._save_config()
+        
+        # Update status
+        self.statusBar().showMessage(f"Switched to {mode} measurement mode", 3000)
+    
     def _on_unit_changed(self, unit: str) -> None:
         """Handle unit change."""
-        self._config.capacitance_unit = unit
-        self._plot_widget.set_capacitance_unit(unit)
+        if self._config.measurement_mode == "capacitance":
+            self._config.capacitance_unit = unit
+            self._plot_widget.set_capacitance_unit(unit)
+        else:
+            self._config.resistance_unit = unit
+            self._plot_widget.set_resistance_unit(unit)
         self._save_config()
     
     def _on_ai_enabled_toggled(self, checked: bool) -> None:
@@ -803,16 +920,23 @@ class MainWindow(QMainWindow):
             )
             self._logger.error(f"Connection test failed for {resource}: {e}")
     
-    def _on_new_sample(self, timestamp, capacitance_farads: float) -> None:
+    def _on_new_sample(self, timestamp, value: float) -> None:
         """Handle new sample from controller."""
         from core.models import Sample
         
-        # Create sample object
-        sample = Sample(
-            timestamp=timestamp,
-            t_seconds=(timestamp - self._controller._start_time).total_seconds() if self._controller._start_time else 0,
-            capacitance_farads=capacitance_farads,
-        )
+        # Create sample object based on measurement mode
+        if self._config.measurement_mode == "capacitance":
+            sample = Sample(
+                timestamp=timestamp,
+                t_seconds=(timestamp - self._controller._start_time).total_seconds() if self._controller._start_time else 0,
+                capacitance_farads=value,
+            )
+        else:
+            sample = Sample(
+                timestamp=timestamp,
+                t_seconds=(timestamp - self._controller._start_time).total_seconds() if self._controller._start_time else 0,
+                resistance_ohms=value,
+            )
         
         # Add to plot
         self._plot_widget.add_sample(sample)
@@ -853,8 +977,12 @@ class MainWindow(QMainWindow):
             if self._config.autorange_enabled:
                 self._range_label.setText("Range: AUTO")
             else:
-                range_val, unit, _ = format_capacitance(self._config.manual_range_farads)
-                self._range_label.setText(f"Range: {range_val:.1f} {unit}")
+                if self._config.measurement_mode == "capacitance":
+                    range_val, unit, _ = format_capacitance(self._config.manual_range_farads)
+                    self._range_label.setText(f"Range: {range_val:.1f} {unit}")
+                else:
+                    range_val, unit, _ = format_resistance(self._config.manual_range_ohms)
+                    self._range_label.setText(f"Range: {range_val:.1f} {unit}")
             
             # Update error count
             error_count = self._controller.get_soft_error_count()

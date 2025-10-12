@@ -119,7 +119,32 @@ class Keithley2110(Instrument):
             self._logger.error(f"Failed to set autorange: {e}")
             raise
     
-    def set_manual_range(self, range_farads: float) -> None:
+    def initialize_resistance_mode(self) -> None:
+        """Initialize Keithley 2110 for resistance measurement."""
+        if not self._instrument:
+            raise RuntimeError("Instrument not connected")
+        
+        try:
+            # Set to remote control
+            self._instrument.write(":SYST:REM")
+            
+            # Set function to resistance (2-wire or 4-wire)
+            # Using 2-wire for simplicity; can be changed to FRES for 4-wire
+            self._instrument.write(':FUNC "RES"')
+            
+            # Set autorange on by default
+            self._instrument.write(":RES:RANG:AUTO ON")
+            
+            # Clear any errors
+            self._instrument.write("*CLS")
+            
+            self._logger.info("Keithley 2110 initialized for resistance measurement")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to initialize resistance mode: {e}")
+            raise
+    
+    def set_manual_range_capacitance(self, range_farads: float) -> None:
         """Set manual range for capacitance measurement."""
         if not self._instrument:
             raise RuntimeError("Instrument not connected")
@@ -129,11 +154,31 @@ class Keithley2110(Instrument):
             # Note: Verify the exact command format in the manual
             self._instrument.write(f":CAP:RANG {range_farads:.12e}")
             
-            self._logger.debug(f"Manual range set to {range_farads:.2e} F")
+            self._logger.debug(f"Manual capacitance range set to {range_farads:.2e} F")
             
         except Exception as e:
-            self._logger.error(f"Failed to set manual range: {e}")
+            self._logger.error(f"Failed to set manual capacitance range: {e}")
             raise
+    
+    def set_manual_range_resistance(self, range_ohms: float) -> None:
+        """Set manual range for resistance measurement."""
+        if not self._instrument:
+            raise RuntimeError("Instrument not connected")
+        
+        try:
+            # Set the range value in ohms
+            self._instrument.write(f":RES:RANG {range_ohms:.12e}")
+            
+            self._logger.debug(f"Manual resistance range set to {range_ohms:.2e} Ω")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to set manual resistance range: {e}")
+            raise
+    
+    # Keep backward compatibility
+    def set_manual_range(self, range_farads: float) -> None:
+        """Set manual range for capacitance measurement (backward compatibility)."""
+        self.set_manual_range_capacitance(range_farads)
     
     def set_nplc(self, nplc: float) -> None:
         """Set integration time in Number of Power Line Cycles."""
@@ -168,6 +213,24 @@ class Keithley2110(Instrument):
             
         except Exception as e:
             self._logger.error(f"Failed to read capacitance: {e}")
+            raise
+    
+    def read_resistance(self) -> float:
+        """Read a single resistance value."""
+        if not self._instrument:
+            raise RuntimeError("Instrument not connected")
+        
+        try:
+            # Read resistance value
+            response = self._instrument.query(":READ?")
+            
+            # Parse the response - should be a single float value in ohms
+            resistance = float(response.strip())
+            
+            return resistance
+            
+        except Exception as e:
+            self._logger.error(f"Failed to read resistance: {e}")
             raise
     
     def get_identification(self) -> str:

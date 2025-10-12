@@ -31,6 +31,8 @@ class PlotWidget(QWidget):
         self._y_min = 0.0
         self._y_max = 1e-9
         self._capacitance_unit = "auto"
+        self._resistance_unit = "auto"
+        self._measurement_mode = "capacitance"  # "capacitance" or "resistance"
         
         # Setup UI
         self._setup_ui()
@@ -174,7 +176,31 @@ class PlotWidget(QWidget):
     def set_capacitance_unit(self, unit: str) -> None:
         """Set the capacitance unit for display."""
         self._capacitance_unit = unit
-        self._update_plot()
+        if self._measurement_mode == "capacitance":
+            self._update_plot_labels()
+    
+    def set_resistance_unit(self, unit: str) -> None:
+        """Set the resistance unit for display."""
+        self._resistance_unit = unit
+        if self._measurement_mode == "resistance":
+            self._update_plot_labels()
+    
+    def set_measurement_mode(self, mode: str) -> None:
+        """Set the measurement mode (capacitance or resistance)."""
+        self._measurement_mode = mode
+        self._update_plot_labels()
+        
+        # Clear current data when switching modes
+        self.clear_all_data()
+    
+    def _update_plot_labels(self) -> None:
+        """Update plot labels based on measurement mode."""
+        if self._measurement_mode == "capacitance":
+            self._plot_widget.setLabel('left', 'Capacitance', units='F')
+            self._plot_widget.setTitle('Capacitance vs Time')
+        else:
+            self._plot_widget.setLabel('left', 'Resistance', units='Ω')
+            self._plot_widget.setTitle('Resistance vs Time')
     
     def _update_plot(self) -> None:
         """Update the plot with current data."""
@@ -215,20 +241,24 @@ class PlotWidget(QWidget):
         
         # Extract data arrays
         times = []
-        capacitances = []
+        values = []
         
         for sample in self._current_data:
             if sample.t_seconds >= start_time:
                 times.append(sample.t_seconds)
-                capacitances.append(sample.capacitance_farads)
+                # Get the appropriate value based on measurement mode
+                if self._measurement_mode == "capacitance" and sample.capacitance_farads is not None:
+                    values.append(sample.capacitance_farads)
+                elif self._measurement_mode == "resistance" and sample.resistance_ohms is not None:
+                    values.append(sample.resistance_ohms)
         
-        if times and capacitances:
+        if times and values:
             # Convert to numpy arrays for performance
             times_array = np.array(times)
-            capacitances_array = np.array(capacitances)
+            values_array = np.array(values)
             
             # Update plot
-            self._current_plot_item.setData(times_array, capacitances_array)
+            self._current_plot_item.setData(times_array, values_array)
     
     def _update_overlay_plots(self) -> None:
         """Update overlay plots."""
@@ -238,13 +268,21 @@ class PlotWidget(QWidget):
         # For simplicity, update the first overlay item
         # In a more sophisticated implementation, you might want to handle multiple overlays
         if len(self._overlay_plot_items) > 0 and self._overlay_plot_items[0] is not None:
-            times = [s.t_seconds for s in self._overlay_data]
-            capacitances = [s.capacitance_farads for s in self._overlay_data]
+            times = []
+            values = []
             
-            if times and capacitances:
+            for s in self._overlay_data:
+                times.append(s.t_seconds)
+                # Get the appropriate value based on measurement mode
+                if self._measurement_mode == "capacitance" and s.capacitance_farads is not None:
+                    values.append(s.capacitance_farads)
+                elif self._measurement_mode == "resistance" and s.resistance_ohms is not None:
+                    values.append(s.resistance_ohms)
+            
+            if times and values:
                 times_array = np.array(times)
-                capacitances_array = np.array(capacitances)
-                self._overlay_plot_items[0].setData(times_array, capacitances_array)
+                values_array = np.array(values)
+                self._overlay_plot_items[0].setData(times_array, values_array)
     
     def get_plot_widget(self) -> pg.PlotWidget:
         """Get the underlying pyqtgraph PlotWidget."""

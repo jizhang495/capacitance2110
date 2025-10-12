@@ -28,10 +28,12 @@ class MockInstrument(Instrument):
             noise_level: Noise level as fraction of baseline (0.1 = 10%)
         """
         self._baseline_farads = baseline_farads
+        self._baseline_ohms = 1e3  # 1 kΩ default
         self._noise_level = noise_level
         self._connected = False
         self._autorange_enabled = True
         self._manual_range_farads = 1e-9
+        self._manual_range_ohms = 1e3
         self._nplc = 1.0
         self._start_time = None
         self._step_changes = []  # List of (time_offset, step_size) tuples
@@ -58,15 +60,32 @@ class MockInstrument(Instrument):
         
         self._logger.info("Mock instrument initialized for capacitance measurement")
     
+    def initialize_resistance_mode(self) -> None:
+        """Initialize mock instrument for resistance measurement."""
+        if not self._connected:
+            raise RuntimeError("Mock instrument not connected")
+        
+        self._logger.info("Mock instrument initialized for resistance measurement")
+    
     def set_autorange(self, enabled: bool) -> None:
         """Enable or disable autorange."""
         self._autorange_enabled = enabled
         self._logger.debug(f"Mock autorange {'enabled' if enabled else 'disabled'}")
     
-    def set_manual_range(self, range_farads: float) -> None:
+    def set_manual_range_capacitance(self, range_farads: float) -> None:
         """Set manual range for capacitance measurement."""
         self._manual_range_farads = range_farads
-        self._logger.debug(f"Mock manual range set to {range_farads:.2e} F")
+        self._logger.debug(f"Mock manual capacitance range set to {range_farads:.2e} F")
+    
+    def set_manual_range_resistance(self, range_ohms: float) -> None:
+        """Set manual range for resistance measurement."""
+        self._manual_range_ohms = range_ohms
+        self._logger.debug(f"Mock manual resistance range set to {range_ohms:.2e} Ω")
+    
+    # Keep backward compatibility
+    def set_manual_range(self, range_farads: float) -> None:
+        """Set manual range for capacitance measurement (backward compatibility)."""
+        self.set_manual_range_capacitance(range_farads)
     
     def set_nplc(self, nplc: float) -> None:
         """Set integration time in Number of Power Line Cycles."""
@@ -82,11 +101,24 @@ class MockInstrument(Instrument):
         elapsed = current_time - self._start_time
         
         # Generate synthetic signal
-        capacitance = self._generate_signal(elapsed)
+        capacitance = self._generate_capacitance_signal(elapsed)
         
         return capacitance
     
-    def _generate_signal(self, elapsed_seconds: float) -> float:
+    def read_resistance(self) -> float:
+        """Read a synthetic resistance value."""
+        if not self._connected:
+            raise RuntimeError("Mock instrument not connected")
+        
+        current_time = time.time()
+        elapsed = current_time - self._start_time
+        
+        # Generate synthetic signal
+        resistance = self._generate_resistance_signal(elapsed)
+        
+        return resistance
+    
+    def _generate_capacitance_signal(self, elapsed_seconds: float) -> float:
         """
         Generate synthetic capacitance signal.
         
@@ -125,6 +157,50 @@ class MockInstrument(Instrument):
         
         return signal
     
+    def _generate_resistance_signal(self, elapsed_seconds: float) -> float:
+        """
+        Generate synthetic resistance signal.
+        
+        Args:
+            elapsed_seconds: Time elapsed since start
+            
+        Returns:
+            Resistance value in ohms
+        """
+        # Baseline resistance
+        signal = self._baseline_ohms
+        
+        # Add slow drift (exponential approach to new baseline)
+        drift_target = self._baseline_ohms * 1.05  # 5% increase over time
+        drift_factor = 1 - 0.5 * (1 - elapsed_seconds / 300)  # 5-minute time constant
+        drift_factor = max(0.5, drift_factor)  # Clamp to reasonable range
+        signal += (drift_target - self._baseline_ohms) * (1 - drift_factor)
+        
+        # Add step changes (simulate connection changes)
+        for step_time, step_size in self._step_changes:
+            if elapsed_seconds >= step_time:
+                signal += step_size
+        
+        # Add random noise
+        noise_amplitude = signal * self._noise_level
+        noise = random.gauss(0, noise_amplitude / 3)  # 3-sigma noise
+        signal += noise
+        
+        # Add periodic variations (simulate temperature effects)
+        temp_variation = 0.03 * signal * (1 + 0.05 * elapsed_seconds / 60) * \
+                        (1 + 0.15 * (elapsed_seconds % 30) / 30)  # 30-second cycle
+        signal += temp_variation * 0.1  # 10% of variation
+        
+        # Ensure positive value
+        signal = max(signal, 1e-3)  # Minimum 1 mΩ
+        
+        return signal
+    
+    # Keep backward compatibility
+    def _generate_signal(self, elapsed_seconds: float) -> float:
+        """Generate synthetic capacitance signal (backward compatibility)."""
+        return self._generate_capacitance_signal(elapsed_seconds)
+    
     def add_step_change(self, time_offset_seconds: float, step_size_farads: float) -> None:
         """
         Add a step change to the signal at a specific time.
@@ -157,7 +233,12 @@ class MockInstrument(Instrument):
     def set_baseline(self, baseline_farads: float) -> None:
         """Set the baseline capacitance value."""
         self._baseline_farads = baseline_farads
-        self._logger.debug(f"Mock baseline set to {baseline_farads:.2e} F")
+        self._logger.debug(f"Mock capacitance baseline set to {baseline_farads:.2e} F")
+    
+    def set_baseline_resistance(self, baseline_ohms: float) -> None:
+        """Set the baseline resistance value."""
+        self._baseline_ohms = baseline_ohms
+        self._logger.debug(f"Mock resistance baseline set to {baseline_ohms:.2e} Ω")
     
     def set_noise_level(self, noise_level: float) -> None:
         """Set the noise level as fraction of baseline."""

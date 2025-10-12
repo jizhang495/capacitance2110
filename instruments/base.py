@@ -1,11 +1,11 @@
-"""Base instrument interface for capacitance measurement devices."""
+"""Base instrument interface for measurement devices."""
 
 from abc import ABC, abstractmethod
 from typing import Optional
 
 
 class Instrument(ABC):
-    """Abstract base class for capacitance measurement instruments."""
+    """Abstract base class for measurement instruments."""
     
     @abstractmethod
     def open(self, resource: Optional[str] = None) -> None:
@@ -28,6 +28,11 @@ class Instrument(ABC):
         pass
     
     @abstractmethod
+    def initialize_resistance_mode(self) -> None:
+        """Initialize the instrument for resistance measurement."""
+        pass
+    
+    @abstractmethod
     def set_autorange(self, enabled: bool) -> None:
         """
         Enable or disable autorange.
@@ -38,12 +43,22 @@ class Instrument(ABC):
         pass
     
     @abstractmethod
-    def set_manual_range(self, range_farads: float) -> None:
+    def set_manual_range_capacitance(self, range_farads: float) -> None:
         """
         Set manual range for capacitance measurement.
         
         Args:
             range_farads: Range value in farads
+        """
+        pass
+    
+    @abstractmethod
+    def set_manual_range_resistance(self, range_ohms: float) -> None:
+        """
+        Set manual range for resistance measurement.
+        
+        Args:
+            range_ohms: Range value in ohms
         """
         pass
     
@@ -64,6 +79,16 @@ class Instrument(ABC):
         
         Returns:
             Capacitance value in farads
+        """
+        pass
+    
+    @abstractmethod
+    def read_resistance(self) -> float:
+        """
+        Read a single resistance value.
+        
+        Returns:
+            Resistance value in ohms
         """
         pass
     

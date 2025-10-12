@@ -14,11 +14,22 @@ from pydantic import BaseModel, Field, field_validator
 
 @dataclass
 class Sample:
-    """A single capacitance measurement sample."""
+    """A single measurement sample (capacitance or resistance)."""
     
     timestamp: datetime
     t_seconds: float  # Time since start of measurement
-    capacitance_farads: float  # Raw capacitance value in farads
+    capacitance_farads: Optional[float] = None  # Raw capacitance value in farads
+    resistance_ohms: Optional[float] = None  # Raw resistance value in ohms
+    
+    @property
+    def value(self) -> float:
+        """Get the measurement value (capacitance or resistance)."""
+        if self.capacitance_farads is not None:
+            return self.capacitance_farads
+        elif self.resistance_ohms is not None:
+            return self.resistance_ohms
+        else:
+            raise ValueError("Sample has no measurement value")
 
 
 class AppConfig(BaseModel):
@@ -36,11 +47,14 @@ class AppConfig(BaseModel):
     sample_period_ms: int = 100
     
     # Measurement settings
+    measurement_mode: str = "capacitance"  # "capacitance" or "resistance"
     autorange_enabled: bool = True
     manual_range_farads: float = 1e-9  # 1 nF default
+    manual_range_ohms: float = 1e3  # 1 kΩ default
     
     # Display settings
     capacitance_unit: str = "auto"  # auto, pF, nF, µF, F
+    resistance_unit: str = "auto"  # auto, mΩ, Ω, kΩ, MΩ
     
     # AI settings
     openai_api_key: Optional[str] = None
@@ -62,6 +76,15 @@ class AppConfig(BaseModel):
             raise ValueError("Time window must be positive")
         return v
     
+    @field_validator("measurement_mode")
+    @classmethod
+    def validate_measurement_mode(cls, v: str) -> str:
+        """Validate measurement mode is supported."""
+        valid_modes = ["capacitance", "resistance"]
+        if v not in valid_modes:
+            raise ValueError(f"Measurement mode must be one of {valid_modes}")
+        return v
+    
     @field_validator("capacitance_unit")
     @classmethod
     def validate_capacitance_unit(cls, v: str) -> str:
@@ -69,6 +92,15 @@ class AppConfig(BaseModel):
         valid_units = ["auto", "pF", "nF", "µF", "F"]
         if v not in valid_units:
             raise ValueError(f"Capacitance unit must be one of {valid_units}")
+        return v
+    
+    @field_validator("resistance_unit")
+    @classmethod
+    def validate_resistance_unit(cls, v: str) -> str:
+        """Validate resistance unit is supported."""
+        valid_units = ["auto", "mΩ", "Ω", "kΩ", "MΩ"]
+        if v not in valid_units:
+            raise ValueError(f"Resistance unit must be one of {valid_units}")
         return v
     
     def to_dict(self) -> Dict[str, Any]:
@@ -104,8 +136,10 @@ class MeasurementMetadata(BaseModel):
     end_time: Optional[datetime] = None
     sample_count: int = 0
     sample_period_ms: int
+    measurement_mode: str = "capacitance"  # "capacitance" or "resistance"
     autorange_enabled: bool
     manual_range_farads: Optional[float] = None
+    manual_range_ohms: Optional[float] = None
     instrument_type: str  # "keithley2110" or "mock"
     visa_resource: Optional[str] = None
     soft_error_count: int = 0
@@ -123,12 +157,13 @@ class MeasurementMetadata(BaseModel):
 def sample_to_dataframe(samples: List[Sample]) -> pd.DataFrame:
     """Convert list of samples to pandas DataFrame."""
     if not samples:
-        return pd.DataFrame(columns=["timestamp_iso8601", "t_seconds", "capacitance_F"])
+        return pd.DataFrame(columns=["timestamp_iso8601", "t_seconds", "capacitance_F", "resistance_Ohm"])
     
     data = {
         "timestamp_iso8601": [s.timestamp.isoformat() for s in samples],
         "t_seconds": [s.t_seconds for s in samples],
-        "capacitance_F": [s.capacitance_farads for s in samples],
+        "capacitance_F": [s.capacitance_farads if s.capacitance_farads is not None else 0.0 for s in samples],
+        "resistance_Ohm": [s.resistance_ohms if s.resistance_ohms is not None else 0.0 for s in samples],
     }
     return pd.DataFrame(data)
 
@@ -138,10 +173,22 @@ def dataframe_to_samples(df: pd.DataFrame) -> List[Sample]:
     samples = []
     for _, row in df.iterrows():
         timestamp = datetime.fromisoformat(row["timestamp_iso8601"])
+        
+        # Handle both old (capacitance only) and new (both types) CSV formats
+        capacitance_farads = None
+        resistance_ohms = None
+        
+        if "capacitance_F" in row and row["capacitance_F"] != 0.0:
+            capacitance_farads = float(row["capacitance_F"])
+        
+        if "resistance_Ohm" in row and row["resistance_Ohm"] != 0.0:
+            resistance_ohms = float(row["resistance_Ohm"])
+        
         sample = Sample(
             timestamp=timestamp,
             t_seconds=float(row["t_seconds"]),
-            capacitance_farads=float(row["capacitance_F"]),
+            capacitance_farads=capacitance_farads,
+            resistance_ohms=resistance_ohms,
         )
         samples.append(sample)
     return samples
